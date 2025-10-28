@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Christopher Manning PhD Tree</title>
+    <link rel="stylesheet" href="style.css" />
+    <link
+      rel="stylesheet"
+      href="https://cdnjs.cloudflare.com/ajax/libs/vis-network/9.1.2/dist/dist/vis-network.min.css"
+      integrity="sha512-WgxfT5LWjfszlPHXRmBWHkV2eceiWTOBvrKCNbdgDYTHrT2AeLCGbF4sZlZw3UMN3WtL0tGUoIAKsu8mllg/XA=="
+      crossorigin="anonymous"
+      referrerpolicy="no-referrer"
+    />
+  </head>
+  <body>
+    <header class="site-header">
+      <div>
+        <h1>Christopher Manning PhD Tree</h1>
+        <p class="subtitle">
+          Interactive look at the advisees and academic descendants of
+          <a href="https://nlp.stanford.edu/~manning/" target="_blank" rel="noopener"
+            >Chris Manning</a
+          >, generated from OpenReview.
+        </p>
+      </div>
+      <nav class="header-actions">
+        <a class="btn" href="manning_tree_latest.json" download>Download Data</a>
+        <a class="btn" href="https://github.com/prakashkagitha/manningphdtree" target="_blank" rel="noopener"
+          >View Source</a
+        >
+      </nav>
+    </header>
+
+    <section id="summary" class="summary">
+      <div class="summary-card">
+        <h2>Total People</h2>
+        <p id="summary-total-nodes">–</p>
+      </div>
+      <div class="summary-card">
+        <h2>Direct Advisees</h2>
+        <p id="summary-direct-advisees">–</p>
+      </div>
+      <div class="summary-card">
+        <h2>Generations Tracked</h2>
+        <p id="summary-depth">–</p>
+      </div>
+      <div class="summary-card">
+        <h2>Institutions Represented</h2>
+        <p id="summary-institutions">–</p>
+      </div>
+    </section>
+
+    <main class="layout">
+      <aside id="sidebar" class="sidebar">
+        <div class="panel">
+          <h2>Find People</h2>
+          <label class="field">
+            <span>Search</span>
+            <input
+              id="search-input"
+              type="search"
+              placeholder="Name, affiliation, research area…"
+              autocomplete="off"
+            />
+          </label>
+          <label class="field">
+            <span>Generation</span>
+            <select id="depth-filter">
+              <option value="all">All</option>
+            </select>
+          </label>
+        </div>
+
+        <div class="panel">
+          <h2>Roster</h2>
+          <p class="panel-hint">
+            Click a name to highlight it in the graph. Double-click opens the profile.
+          </p>
+          <ul id="roster-list" class="roster-list"></ul>
+        </div>
+      </aside>
+
+      <section class="graph-area">
+        <div id="network"></div>
+        <article id="profile-card" class="profile-card hidden">
+          <header>
+            <h2 id="profile-name">Select a node</h2>
+            <span id="profile-generation" class="badge"></span>
+          </header>
+          <dl>
+            <div>
+              <dt>Affiliation</dt>
+              <dd id="profile-affiliation">–</dd>
+            </div>
+            <div>
+              <dt>Descendants</dt>
+              <dd id="profile-descendants">–</dd>
+            </div>
+            <div>
+              <dt>Direct Advisees</dt>
+              <dd id="profile-advisees">–</dd>
+            </div>
+            <div>
+              <dt>Research Areas</dt>
+              <dd id="profile-research">–</dd>
+            </div>
+            <div>
+              <dt>Links</dt>
+              <dd id="profile-links">–</dd>
+            </div>
+          </dl>
+        </article>
+      </section>
+    </main>
+
+    <footer class="site-footer">
+      <p>
+        Built with data from OpenReview as of
+        <span id="summary-generated">–</span>. Version 0.1 – feedback welcome!
+      </p>
+    </footer>
+
+    <script
+      src="https://cdnjs.cloudflare.com/ajax/libs/vis-network/9.1.2/dist/vis-network.min.js"
+      integrity="sha512-LnvoEWDFrqGHlHmDD2101OrLcbsfkrzoSpvtSQtxK3RMnRV0eOkhhBN2dXHKRrUU8p2DGRTk35n4O8nWSVe1mQ=="
+      crossorigin="anonymous"
+      referrerpolicy="no-referrer"
+    ></script>
+    <script src="app.js" type="module"></script>
+  </body>
+</html>
