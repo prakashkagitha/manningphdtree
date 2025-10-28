@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Christopher Manning PhD Tree</title>
+    <title>Chris Manning PhD Tree</title>
     <link rel="stylesheet" href="style.css" />
     <link
       rel="stylesheet"
@@ -15,30 +15,39 @@
   </head>
   <body>
     <header class="site-header">
-      <div>
-        <h1>Christopher Manning PhD Tree</h1>
+      <div class="hero-meta">
+        <img
+          src="Christopher_Manning_027_132x132.jpg"
+          alt="Portrait of Chris Manning"
+          class="hero-portrait"
+          width="132"
+          height="132"
+        />
+        <nav class="header-actions">
+          <a class="btn" href="manning_tree_latest.json" download>Download Data</a>
+          <a class="btn" href="https://github.com/prakashkagitha/manningphdtree" target="_blank" rel="noopener"
+            >View Source</a
+          >
+        </nav>
+      </div>
+      <div class="hero-copy">
+        <h1>Chris Manning PhD Tree</h1>
         <p class="subtitle">
-          Interactive look at the advisees and academic descendants of
+          Interactive look at the PhD students and extended academic lineage of
           <a href="https://nlp.stanford.edu/~manning/" target="_blank" rel="noopener"
             >Chris Manning</a
-          >, generated from OpenReview.
+          >, generated from OpenReview and refreshed regularly.
         </p>
       </div>
-      <nav class="header-actions">
-        <a class="btn" href="manning_tree_latest.json" download>Download Data</a>
-        <a class="btn" href="https://github.com/prakashkagitha/manningphdtree" target="_blank" rel="noopener"
-          >View Source</a
-        >
-      </nav>
     </header>
 
     <section id="summary" class="summary">
       <div class="summary-card">
-        <h2>Total People</h2>
+        <h2>Direct &amp; Indirect PhD Students</h2>
         <p id="summary-total-nodes">–</p>
       </div>
       <div class="summary-card">
-        <h2>Direct Advisees</h2>
+        <h2>Direct PhD Students</h2>
         <p id="summary-direct-advisees">–</p>
       </div>
       <div class="summary-card">
@@ -75,7 +84,7 @@
         <div class="panel">
           <h2>Roster</h2>
           <p class="panel-hint">
-            Click a name to highlight it in the graph. Double-click opens the profile.
+            Click a name to highlight it in the graph. Double-click opens a public profile.
           </p>
           <ul id="roster-list" class="roster-list"></ul>
         </div>
@@ -83,22 +92,23 @@
 
       <section class="graph-area">
         <div id="network"></div>
-        <article id="profile-card" class="profile-card hidden">
-          <header>
-            <h2 id="profile-name">Select a node</h2>
-            <span id="profile-generation" class="badge"></span>
-          </header>
-          <dl>
+        <div class="details-grid">
+          <article id="profile-card" class="profile-card hidden">
+            <header>
+              <h2 id="profile-name">Select a node</h2>
+              <span id="profile-generation" class="badge"></span>
+            </header>
+            <dl>
             <div>
               <dt>Affiliation</dt>
               <dd id="profile-affiliation">–</dd>
             </div>
             <div>
-              <dt>Descendants</dt>
+              <dt>Extended PhD Lineage</dt>
               <dd id="profile-descendants">–</dd>
             </div>
             <div>
-              <dt>Direct Advisees</dt>
+              <dt>Direct PhD Students</dt>
               <dd id="profile-advisees">–</dd>
             </div>
             <div>
@@ -110,14 +120,33 @@
               <dd id="profile-links">–</dd>
             </div>
           </dl>
-        </article>
+          </article>
+          <article id="preview-card" class="preview-card hidden">
+            <header>
+              <h2>Homepage Preview</h2>
+              <button id="preview-refresh" class="btn btn-outline" type="button">Reload</button>
+            </header>
+            <div class="preview-body">
+              <div class="preview-frame-wrapper">
+                <iframe
+                  id="profile-preview-frame"
+                  title="Homepage preview"
+                  sandbox="allow-same-origin allow-scripts allow-forms allow-popups"
+                  loading="lazy"
+                ></iframe>
+              </div>
+              <p id="profile-preview-status" class="preview-status"></p>
+            </div>
+          </article>
+        </div>
       </section>
     </main>
 
     <footer class="site-footer">
       <p>
         Built with data from OpenReview as of
-        <span id="summary-generated">–</span>. Version 0.1 – feedback welcome!
+        <span id="summary-generated">–</span>. Version 0.1 – feedback welcome at
+        <a href="mailto:prakashkagitha@gmail.com">prakashkagitha@gmail.com</a>.
       </p>
     </footer>
 

@@ -7,6 +7,9 @@ const state = {
 };
 
 let network = null;
+let previewLoadTimeout = null;
+
+const formatNumber = (value) => new Intl.NumberFormat().format(value ?? 0);
 
 const elements = {
   summaryTotalNodes: document.getElementById("summary-total-nodes"),
@@ -25,7 +28,13 @@ const elements = {
   profileAdvisees: document.getElementById("profile-advisees"),
   profileResearch: document.getElementById("profile-research"),
   profileLinks: document.getElementById("profile-links"),
+  previewCard: document.getElementById("preview-card"),
+  previewFrame: document.getElementById("profile-preview-frame"),
+  previewStatus: document.getElementById("profile-preview-status"),
+  previewRefresh: document.getElementById("preview-refresh"),
 };
+
+elements.previewRefresh.disabled = true;
 
 const depthColors = ["#345CFF", "#1CB5E0", "#00B894", "#FDC830", "#F76B1C", "#d853a6"];
 
@@ -74,7 +83,7 @@ const buildSearchHaystack = (node) => {
 
 const depthLabel = (depth) => {
   if (depth === 0) return "Generation 0 (Chris Manning)";
-  if (depth === 1) return "Generation 1 (Direct advisee)";
+  if (depth === 1) return "Generation 1 (Direct PhD student)";
   return `Generation ${depth}`;
 };
 
@@ -84,16 +93,18 @@ const populateSummary = () => {
     nodes,
   } = state.data;
 
-  elements.summaryTotalNodes.textContent = total_nodes;
-  elements.summaryDirectAdvisees.textContent = direct_advisees;
-  elements.summaryDepth.textContent = `${max_depth + 1}`;
+  elements.summaryTotalNodes.textContent = formatNumber(total_nodes);
+  elements.summaryDirectAdvisees.textContent = formatNumber(direct_advisees);
+  elements.summaryDepth.textContent = formatNumber(max_depth + 1);
 
   const uniqueInstitutions = new Set(
     nodes
       .map((n) => n.affiliation_name || n.affiliation_domain)
       .filter(Boolean)
   );
-  elements.summaryInstitutions.textContent = uniqueInstitutions.size || "–";
+  elements.summaryInstitutions.textContent = uniqueInstitutions.size
+    ? formatNumber(uniqueInstitutions.size)
+    : "–";
 
   const generatedStamp =
     state.data.generated_at ||
@@ -106,7 +117,7 @@ const populateSummary = () => {
 
   // optional: show tooltip with depth counts
   elements.summaryDepth.title = Object.entries(depth_counts)
-    .map(([depth, count]) => `Generation ${depth}: ${count}`)
+    .map(([depth, count]) => `Generation ${depth}: ${formatNumber(count)} people`)
     .join("\n");
 };
 
@@ -123,6 +134,9 @@ const populateFilters = () => {
 const wireEvents = () => {
   elements.searchInput.addEventListener("input", handleFiltersChanged);
   elements.depthFilter.addEventListener("change", handleFiltersChanged);
+  elements.previewRefresh.addEventListener("click", handlePreviewRefresh);
+  elements.previewFrame.addEventListener("load", handlePreviewLoad);
+  elements.previewFrame.addEventListener("error", handlePreviewError);
 };
 
 const handleFiltersChanged = () => {
@@ -157,7 +171,9 @@ const renderRoster = () => {
     li.innerHTML = `
       <div class="name">${node.name}</div>
       <div class="meta">
-        ${node.affiliationDisplay} • Advisees: ${node.direct_advisee_count} • Gen ${node.depth}
+        ${node.affiliationDisplay} • Direct PhD students: ${formatNumber(
+          node.direct_advisee_count
+        )} • Gen ${node.depth}
       </div>
     `;
     li.addEventListener("click", () => selectNode(node.id, { focus: true }));
@@ -171,45 +187,105 @@ const renderRoster = () => {
 
 const initGraph = () => {
   const container = document.getElementById("network");
-  const nodesData = state.nodes.map((node) => ({
-    id: node.id,
-    label: `${node.name}`,
-    title: buildTooltip(node),
-    color: pickDepthColor(node.depth),
-    shape: "dot",
-    size: node.id === state.data.root ? 24 : Math.min(18 + node.direct_advisee_count, 32),
-    borderWidth: node.id === state.data.root ? 3 : 1,
-    font: {
-      color: "#111829",
-      face: "Inter, Arial",
-      size: node.id === state.data.root ? 18 : 14,
-    },
-  }));
+
+  const nodeById = new Map(state.nodes.map((node) => [node.id, node]));
+  const depthGroups = new Map();
+  state.nodes.forEach((node) => {
+    if (!depthGroups.has(node.depth)) {
+      depthGroups.set(node.depth, []);
+    }
+    depthGroups.get(node.depth).push(node.id);
+  });
+
+  const depthOrdering = new Map();
+  depthGroups.forEach((ids, depth) => {
+    ids.sort((a, b) => {
+      const nameA = (nodeById.get(a)?.name || a).toLowerCase();
+      const nameB = (nodeById.get(b)?.name || b).toLowerCase();
+      return nameA.localeCompare(nameB);
+    });
+    ids.forEach((id, index) => {
+      depthOrdering.set(id, { index, total: ids.length });
+    });
+  });
+
+  const computePosition = (depth, index, total) => {
+    if (depth === 0) {
+      return { x: 0, y: 0 };
+    }
+    const arc = depth === 1 ? Math.PI * 1.2 : Math.PI * 1.8;
+    const startAngle = -arc / 2;
+    const angle =
+      total === 1
+        ? 0
+        : startAngle +
+          (index / (total - 1)) * arc +
+          (depth > 2 ? (index % 2 === 0 ? 0.04 : -0.04) : 0);
+    const radius = depth * 280;
+    return {
+      x: radius * Math.cos(angle),
+      y: radius * Math.sin(angle),
+    };
+  };
+
+  const nodesData = state.nodes.map((node) => {
+    const { index = 0, total = 1 } = depthOrdering.get(node.id) || {};
+    const depth = nodeById.get(node.id)?.depth ?? 0;
+    const position = computePosition(depth, index, total);
+    return {
+      id: node.id,
+      label: `${node.name}`,
+      title: buildTooltip(node),
+      color: pickDepthColor(node.depth),
+      shape: "dot",
+      size: node.id === state.data.root ? 26 : Math.min(16 + node.direct_advisee_count, 30),
+      borderWidth: node.id === state.data.root ? 3 : 1,
+      mass: Math.max(1, 6 - node.depth),
+      x: position.x,
+      y: position.y,
+      font: {
+        color: "#111829",
+        face: "Inter, Arial",
+        size: node.id === state.data.root ? 18 : 14,
+        strokeWidth: 3,
+        strokeColor: "#ffffff",
+      },
+    };
+  });
 
   const edgesData = state.edges.map((edge) => ({
     ...edge,
     arrows: "to",
-    color: { color: "#CDD3E2" },
-    smooth: { type: "cubicBezier", roundness: 0.4 },
+    color: { color: "#B6BED3" },
+    smooth: { type: "cubicBezier", roundness: 0.3 },
   }));
 
   const options = {
     layout: {
       improvedLayout: true,
+      randomSeed: 7,
     },
     physics: {
-      stabilization: true,
+      enabled: true,
+      stabilization: {
+        iterations: 250,
+        updateInterval: 50,
+        fit: true,
+      },
       barnesHut: {
-        gravitationalConstant: -2000,
-        centralGravity: 0.095,
-        springLength: 140,
-        springConstant: 0.04,
+        gravitationalConstant: -2800,
+        centralGravity: 0.08,
+        springLength: 230,
+        springConstant: 0.035,
+        damping: 0.26,
+        avoidOverlap: 1,
       },
     },
     interaction: {
       hover: true,
       tooltipDelay: 120,
       multiselect: false,
+      navigationButtons: true,
     },
     edges: {
       arrows: {
@@ -219,6 +295,10 @@ const initGraph = () => {
   };
 
   network = new vis.Network(container, { nodes: nodesData, edges: edgesData }, options);
+
+  network.once("stabilizationIterationsDone", () => {
+    network.setOptions({ physics: false });
+  });
 
   network.on("selectNode", (params) => {
     const nodeId = params.nodes[0];
@@ -245,7 +325,9 @@ const buildTooltip = (node) => {
   return `
     <strong>${node.name}</strong><br />
     ${affiliation}<br />
-    Advisees: ${node.direct_advisee_count} | Descendants: ${node.total_descendants}<br />
+    Direct PhD students: ${formatNumber(node.direct_advisee_count)} | PhD lineage: ${formatNumber(
+    node.total_descendants
+  )}<br />
     ${research}
   `;
 };
@@ -274,6 +356,7 @@ const selectNode = (nodeId, options = {}) => {
 
   highlightRosterSelection();
   populateProfileCard(node);
+  updatePreview(node);
 };
 
 const highlightRosterSelection = () => {
@@ -294,8 +377,8 @@ const populateProfileCard = (node) => {
   elements.profileGeneration.textContent = depthLabel(node.depth);
 
   elements.profileAffiliation.textContent = node.affiliationDisplay ?? "—";
-  elements.profileDescendants.textContent = node.total_descendants ?? "0";
-  elements.profileAdvisees.textContent = node.direct_advisee_count ?? "0";
+  elements.profileDescendants.textContent = formatNumber(node.total_descendants);
+  elements.profileAdvisees.textContent = formatNumber(node.direct_advisee_count);
 
   if (node.expertise_keywords && node.expertise_keywords.length) {
     elements.profileResearch.innerHTML = node.expertise_keywords
@@ -321,6 +404,62 @@ const openProfileLink = (node) => {
   if (link) {
     window.open(link, "_blank", "noopener");
   }
+};
+
+const updatePreview = (node) => {
+  clearTimeout(previewLoadTimeout);
+  elements.previewFrame.dataset.homepage = node.homepage || "";
+
+  if (!node.homepage) {
+    elements.previewCard.classList.remove("hidden");
+    elements.previewFrame.classList.add("hidden");
+    elements.previewFrame.src = "about:blank";
+    elements.previewStatus.innerHTML =
+      "No homepage listed yet. If you know one, please email <a href=\"mailto:prakashkagitha@gmail.com\">prakashkagitha@gmail.com</a>.";
+    elements.previewRefresh.disabled = true;
+    return;
+  }
+
+  elements.previewCard.classList.remove("hidden");
+  elements.previewFrame.classList.remove("hidden");
+  elements.previewStatus.textContent = "Loading preview…";
+  elements.previewRefresh.disabled = false;
+
+  try {
+    elements.previewFrame.src = node.homepage;
+  } catch (error) {
+    handlePreviewError();
+    return;
+  }
+
+  previewLoadTimeout = window.setTimeout(() => {
+    elements.previewFrame.classList.add("hidden");
+    elements.previewStatus.innerHTML = `This site blocks embedding or is taking too long. <a href="${node.homepage}" target="_blank" rel="noopener">Open homepage in a new tab</a>.`;
+  }, 5000);
+};
+
+const handlePreviewRefresh = () => {
+  if (!state.selectedNodeId) return;
+  const node = state.nodes.find((n) => n.id === state.selectedNodeId);
+  if (node) {
+    updatePreview(node);
+  }
+};
+
+const handlePreviewLoad = () => {
+  clearTimeout(previewLoadTimeout);
+  if (!elements.previewFrame.dataset.homepage) return;
+  elements.previewFrame.classList.remove("hidden");
+  elements.previewStatus.textContent = "";
+};
+
+const handlePreviewError = () => {
+  clearTimeout(previewLoadTimeout);
+  const homepage = elements.previewFrame.dataset.homepage;
+  elements.previewFrame.classList.add("hidden");
+  elements.previewStatus.innerHTML = homepage
+    ? `Preview unavailable. <a href="${homepage}" target="_blank" rel="noopener">Open homepage in a new tab</a>.`
+    : "";
 };
 
 init();
