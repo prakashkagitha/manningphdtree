@@ -420,28 +420,13 @@ const updatePreview = (node) => {
     return;
   }
 
-  let homepageUrl = node.homepage.trim();
-  if (!/^https?:\/\//i.test(homepageUrl)) {
-    homepageUrl = `https://${homepageUrl}`;
-  }
-
-  const isHttpOnly = /^http:\/\//i.test(homepageUrl);
-  if (isHttpOnly && window.location.protocol === "https:") {
-    elements.previewCard.classList.remove("hidden");
-    elements.previewFrame.classList.add("hidden");
-    elements.previewFrame.src = "about:blank";
-    elements.previewStatus.innerHTML = `This homepage is served over HTTP and modern browsers block embedding it on a secure site. <a href="${homepageUrl}" target="_blank" rel="noopener">Open homepage in a new tab</a>.`;
-    elements.previewRefresh.disabled = true;
-    return;
-  }
-
   elements.previewCard.classList.remove("hidden");
   elements.previewFrame.classList.remove("hidden");
   elements.previewStatus.textContent = "Loading preview…";
   elements.previewRefresh.disabled = false;
 
   try {
-    elements.previewFrame.src = homepageUrl;
+    elements.previewFrame.src = node.homepage;
   } catch (error) {
     handlePreviewError();
     return;
@@ -449,7 +434,7 @@ const updatePreview = (node) => {
 
   previewLoadTimeout = window.setTimeout(() => {
     elements.previewFrame.classList.add("hidden");
-    elements.previewStatus.innerHTML = `This site blocks embedding or is taking too long. <a href="${homepageUrl}" target="_blank" rel="noopener">Open homepage in a new tab</a>.`;
+    elements.previewStatus.innerHTML = `This site blocks embedding or is taking too long. <a href="${node.homepage}" target="_blank" rel="noopener">Open homepage in a new tab</a>.`;
   }, 5000);
 };
 
