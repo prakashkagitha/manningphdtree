@@ -263,7 +263,6 @@ const initGraph = () => {
   const options = {
     layout: {
       improvedLayout: true,
-      randomSeed: 7,
     },
     physics: {
       enabled: true,
