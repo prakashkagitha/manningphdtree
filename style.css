@@ -290,6 +290,26 @@ a:hover {
   stroke: #4b6fb6;
 }
 
+.graph-link.lineage-active {
+  stroke: #1a3d8f;
+  stroke-width: 1.8px;
+  stroke-opacity: 0.9;
+}
+
+.graph-link.lineage-muted {
+  stroke-opacity: 0.08;
+}
+
+.graph-link.hovered {
+  stroke: #f7b733;
+  stroke-opacity: 0.9;
+  stroke-width: 2px;
+}
+
+.graph-link.hover-muted {
+  stroke-opacity: 0.1;
+}
+
 .graph-node {
   cursor: pointer;
 }
@@ -301,6 +321,40 @@ a:hover {
 .graph-node.selected .graph-node-circle {
   stroke: #1a3d8f;
   stroke-width: 3px;
+}
+
+.graph-node.lineage-active .graph-node-circle {
+  stroke: #1a3d8f;
+  stroke-width: 3px;
+}
+
+.graph-node.lineage-active .node-label {
+  fill: #0c1e4f;
+}
+
+.graph-node.lineage-muted .graph-node-circle {
+  opacity: 0.28;
+}
+
+.graph-node.lineage-muted .node-label {
+  opacity: 0.45;
+}
+
+.graph-node.hovered .graph-node-circle {
+  stroke: #f7b733;
+  stroke-width: 3px;
+}
+
+.graph-node.hovered .node-label {
+  fill: #f7b733;
+}
+
+.graph-node.hover-muted .graph-node-circle {
+  opacity: 0.35;
+}
+
+.graph-node.hover-muted .node-label {
+  opacity: 0.55;
 }
 
 .graph-node.is-root .graph-node-circle {
@@ -324,6 +378,25 @@ a:hover {
 
 .graph-node.selected .node-label {
   fill: #102a63;
+}
+
+.hover-badge {
+  font-size: 0.68rem;
+  font-weight: 600;
+  fill: #143166;
+  stroke: rgba(255, 255, 255, 0.92);
+  stroke-width: 6px;
+  paint-order: stroke;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.2s ease, transform 0.2s ease;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.graph-node.hovered .hover-badge {
+  opacity: 1;
+  transform: translateY(-2px);
 }
 
 .graph-node:focus-visible .graph-node-circle {

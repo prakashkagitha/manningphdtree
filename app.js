@@ -27,6 +27,14 @@ const graphState = {
   size: { width: 0, height: 0 },
   maxDepth: 0,
   resizeObserver: null,
+  initialFocusDone: false,
+  initialFocusScheduled: false,
+  parentByChild: new Map(),
+  childrenByParent: new Map(),
+  depthById: new Map(),
+  lineageNodes: new Set(),
+  lineageEdges: new Set(),
+  hoveredId: null,
 };
 
 let previewLoadTimeout = null;
@@ -94,6 +102,117 @@ const getClusterTarget = (node) => {
   return { x: width / 2, y: height / 2 };
 };
 
+const edgeKey = (sourceId, targetId) => `${sourceId}|${targetId}`;
+
+const getPreferredParent = (nodeId) => {
+  const parents = graphState.parentByChild.get(nodeId);
+  if (!parents || !parents.length) return null;
+  const depthMap = graphState.depthById;
+  const best = parents.reduce((currentBest, candidate) => {
+    if (!candidate) return currentBest;
+    if (!currentBest) return candidate;
+    const candidateDepth = depthMap.get(candidate) ?? Number.POSITIVE_INFINITY;
+    const bestDepth = depthMap.get(currentBest) ?? Number.POSITIVE_INFINITY;
+    if (candidateDepth < bestDepth) return candidate;
+    if (candidateDepth === bestDepth) {
+      return candidate < currentBest ? candidate : currentBest;
+    }
+    return currentBest;
+  }, null);
+  return best ?? parents[0];
+};
+
+const applyLineageClasses = () => {
+  const hasLineage = graphState.lineageNodes && graphState.lineageNodes.size > 0;
+  const shouldDim = graphState.lineageNodes && graphState.lineageNodes.size > 1;
+  if (graphState.nodeSelection) {
+    graphState.nodeSelection
+      .classed("lineage-active", (node) => hasLineage && graphState.lineageNodes.has(node.id))
+      .classed("lineage-muted", (node) => shouldDim && !graphState.lineageNodes.has(node.id));
+  }
+  if (graphState.linkSelection) {
+    graphState.linkSelection
+      .classed("lineage-active", (link) => {
+        const sourceId = typeof link.source === "object" ? link.source.id : link.source;
+        const targetId = typeof link.target === "object" ? link.target.id : link.target;
+        return hasLineage && graphState.lineageEdges.has(edgeKey(sourceId, targetId));
+      })
+      .classed("lineage-muted", (link) => {
+        if (!shouldDim) return false;
+        const sourceId = typeof link.source === "object" ? link.source.id : link.source;
+        const targetId = typeof link.target === "object" ? link.target.id : link.target;
+        return !graphState.lineageEdges.has(edgeKey(sourceId, targetId));
+      });
+  }
+};
+
+const updateLineageHighlight = (nodeId) => {
+  const lineageNodes = new Set();
+  const lineageEdges = new Set();
+  if (nodeId) {
+    const seen = new Set();
+    let current = nodeId;
+    while (current && !seen.has(current)) {
+      seen.add(current);
+      lineageNodes.add(current);
+      if (current === state.data.root) break;
+      const parent = getPreferredParent(current);
+      if (!parent) break;
+      lineageEdges.add(edgeKey(parent, current));
+      current = parent;
+    }
+    lineageNodes.add(state.data.root);
+  }
+  graphState.lineageNodes = lineageNodes;
+  graphState.lineageEdges = lineageEdges;
+  applyLineageClasses();
+};
+
+const clearLineageHighlight = () => {
+  graphState.lineageNodes = new Set();
+  graphState.lineageEdges = new Set();
+  applyLineageClasses();
+};
+
+const applyHoverHighlight = (nodeId = null) => {
+  const relatedNodes = new Set();
+  const relatedEdges = new Set();
+  if (nodeId) {
+    relatedNodes.add(nodeId);
+    const parent = getPreferredParent(nodeId);
+    if (parent) {
+      relatedNodes.add(parent);
+      relatedEdges.add(edgeKey(parent, nodeId));
+    }
+    const children = graphState.childrenByParent.get(nodeId) || [];
+    children.forEach((child) => {
+      relatedNodes.add(child);
+      relatedEdges.add(edgeKey(nodeId, child));
+    });
+  }
+  const hasHover = !!nodeId;
+  if (graphState.nodeSelection) {
+    graphState.nodeSelection
+      .classed("hovered", (node) => hasHover && relatedNodes.has(node.id))
+      .classed("hover-muted", (node) => hasHover && !relatedNodes.has(node.id));
+  }
+  if (graphState.linkSelection) {
+    graphState.linkSelection
+      .classed("hovered", (link) => {
+        if (!hasHover) return false;
+        const sourceId = typeof link.source === "object" ? link.source.id : link.source;
+        const targetId = typeof link.target === "object" ? link.target.id : link.target;
+        return relatedEdges.has(edgeKey(sourceId, targetId));
+      })
+      .classed("hover-muted", (link) => {
+        if (!hasHover) return false;
+        const sourceId = typeof link.source === "object" ? link.source.id : link.source;
+        const targetId = typeof link.target === "object" ? link.target.id : link.target;
+        return !relatedEdges.has(edgeKey(sourceId, targetId));
+      });
+  }
+  graphState.hoveredId = nodeId;
+};
 const highlightGraphSelection = (nodeId) => {
   if (graphState.nodeSelection) {
     graphState.nodeSelection.classed("selected", (node) => node.id === nodeId);
@@ -126,6 +245,29 @@ const focusGraphNode = (nodeId, { scale = 1.2 } = {}) => {
     .scale(clampedScale);
   graphState.currentTransform = transform;
   graphState.svg.transition().duration(600).call(graphState.zoom.transform, transform);
+};
+
+const attemptInitialFocus = () => {
+  if (graphState.initialFocusDone) return;
+  const { width, height } = graphState.size;
+  if (!width || !height || width < 240 || height < 240) {
+    window.requestAnimationFrame(attemptInitialFocus);
+    return;
+  }
+  const root = graphState.nodesById.get(state.data.root);
+  if (!root || !Number.isFinite(root.x) || !Number.isFinite(root.y)) {
+    window.requestAnimationFrame(attemptInitialFocus);
+    return;
+  }
+  graphState.initialFocusDone = true;
+  graphState.initialFocusScheduled = false;
+  focusGraphNode(state.data.root, { scale: 1.15 });
+};
+
+const scheduleInitialFocus = () => {
+  if (graphState.initialFocusDone || graphState.initialFocusScheduled) return;
+  graphState.initialFocusScheduled = true;
+  window.requestAnimationFrame(attemptInitialFocus);
 };
 
 const init = async () => {
@@ -296,6 +438,11 @@ const initGraph = () => {
 
   graphState.container = container;
   graphState.svg = svg;
+  graphState.initialFocusDone = false;
+  graphState.initialFocusScheduled = false;
+  graphState.lineageNodes = new Set();
+  graphState.lineageEdges = new Set();
+  graphState.hoveredId = null;
 
   const zoomLayer = svg.append("g").attr("class", "graph-viewport");
   const linkGroup = zoomLayer.append("g").attr("class", "graph-links");
@@ -313,11 +460,16 @@ const initGraph = () => {
   const depthById = new Map(state.nodes.map((node) => [node.id, node.depth ?? 0]));
 
   const parentByChild = new Map();
+  const childrenByParent = new Map();
   state.edges.forEach((edge) => {
     if (!parentByChild.has(edge.to)) {
       parentByChild.set(edge.to, []);
     }
     parentByChild.get(edge.to).push(edge.from);
+    if (!childrenByParent.has(edge.from)) {
+      childrenByParent.set(edge.from, []);
+    }
+    childrenByParent.get(edge.from).push(edge.to);
   });
 
   const clusterCache = new Map([[rootId, rootId]]);
@@ -383,6 +535,9 @@ const initGraph = () => {
 
   graphState.maxDepth = d3.max(nodes, (node) => node.depth ?? 0) ?? 0;
   graphState.directAdvisees = nodes.filter((node) => node.id !== rootId && node.clusterId === node.id);
+  graphState.parentByChild = parentByChild;
+  graphState.childrenByParent = childrenByParent;
+  graphState.depthById = depthById;
   graphState.clusterCenters = computeClusterCenters(width, height, graphState.directAdvisees, rootId);
   graphState.nodesById = new Map(nodes.map((node) => [node.id, node]));
 
@@ -403,6 +558,12 @@ const initGraph = () => {
       graphState.zoomLayer.attr("transform", event.transform);
     });
   svg.call(zoom).on("dblclick.zoom", null);
+  svg.on("click", (event) => {
+    // Ignore clicks that originated from nodes (they stop propagation)
+    if (event.defaultPrevented) return;
+    clearLineageHighlight();
+    highlightGraphSelection(null);
+  });
   graphState.zoom = zoom;
   graphState.currentTransform = d3.zoomIdentity;
 
@@ -457,6 +618,12 @@ const initGraph = () => {
         .attr("text-anchor", "middle")
         .attr("dy", (node) => nodeRadius(node) + 18)
         .text((node) => node.name);
+      group
+        .append("text")
+        .attr("class", "hover-badge")
+        .attr("text-anchor", "middle")
+        .attr("dy", (node) => -nodeRadius(node) - 12)
+        .text((node) => (node.depth === 0 ? "Root" : `Gen ${node.depth}`));
       group.append("title").text((node) => buildTooltip(node));
       return group;
     });
@@ -473,6 +640,18 @@ const initGraph = () => {
       event.stopPropagation();
       openProfileLink(node);
     })
+    .on("mouseover", (event, node) => {
+      applyHoverHighlight(node.id);
+    })
+    .on("mouseout", () => {
+      applyHoverHighlight(null);
+    })
+    .on("focus", (event, node) => {
+      applyHoverHighlight(node.id);
+    })
+    .on("blur", () => {
+      applyHoverHighlight(null);
+    })
     .on("keydown", (event, node) => {
       if (event.key === "Enter" || event.key === " ") {
         event.preventDefault();
@@ -484,6 +663,7 @@ const initGraph = () => {
 
   graphState.nodeSelection = nodeSelection;
   graphState.linkSelection = linkSelection;
+  applyHoverHighlight(null);
 
   const linkDistance = (link) => {
     const sourceDepth =
@@ -528,6 +708,7 @@ const initGraph = () => {
     });
 
   graphState.simulation = simulation;
+  scheduleInitialFocus();
 
   const rootNode = graphState.nodesById.get(rootId);
   if (rootNode) {
@@ -564,6 +745,12 @@ const initGraph = () => {
           lockedRoot.fy = newHeight / 2;
         }
         graphState.simulation.alpha(0.35).restart();
+        if (!graphState.initialFocusDone) {
+          scheduleInitialFocus();
+        } else {
+          const currentScale = graphState.currentTransform?.k ?? 1;
+          focusGraphNode(state.data.root, { scale: currentScale });
+        }
       }
     });
     resizeObserver.observe(container);
@@ -572,7 +759,7 @@ const initGraph = () => {
     console.warn("ResizeObserver not supported; graph will not adapt to container size changes.");
   }
 
-  selectNode(state.data.root, { focus: true });
+  selectNode(state.data.root);
   console.timeEnd("initGraph");
 };
 
@@ -604,6 +791,7 @@ const selectNode = (nodeId, options = {}) => {
   const node = state.nodes.find((n) => n.id === nodeId);
   if (!node) return;
 
+  updateLineageHighlight(nodeId);
   highlightGraphSelection(nodeId);
   if (options.focus) {
     const scale = nodeId === state.data.root ? 1.05 : 1.35;
