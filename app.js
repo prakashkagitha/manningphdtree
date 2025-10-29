@@ -1,3 +1,9 @@
+const d3 = window.d3;
+if (!d3) {
+  throw new Error("D3 failed to load. Please ensure the D3 script tag is available.");
+}
+console.info("D3 version:", d3.version);
+
 const state = {
   data: null,
   nodes: [],
@@ -6,7 +12,23 @@ const state = {
   selectedNodeId: null,
 };
 
-let network = null;
+const graphState = {
+  svg: null,
+  zoomLayer: null,
+  nodeSelection: null,
+  linkSelection: null,
+  simulation: null,
+  zoom: null,
+  currentTransform: d3.zoomIdentity,
+  container: null,
+  nodesById: new Map(),
+  clusterCenters: new Map(),
+  directAdvisees: [],
+  size: { width: 0, height: 0 },
+  maxDepth: 0,
+  resizeObserver: null,
+};
+
 let previewLoadTimeout = null;
 
 const formatNumber = (value) => new Intl.NumberFormat().format(value ?? 0);
@@ -38,6 +60,74 @@ elements.previewRefresh.disabled = true;
 
 const depthColors = ["#345CFF", "#1CB5E0", "#00B894", "#FDC830", "#F76B1C", "#d853a6"];
 
+const computeClusterCenters = (width, height, directAdvisees, rootId) => {
+  const centers = new Map();
+  const center = { x: width / 2, y: height / 2 };
+  centers.set(rootId, center);
+  if (!directAdvisees.length) {
+    return centers;
+  }
+
+  const radius = Math.min(width, height) * 0.32;
+  directAdvisees.forEach((node, index) => {
+    const angle = (index / directAdvisees.length) * Math.PI * 2 - Math.PI / 2;
+    centers.set(node.id, {
+      x: center.x + Math.cos(angle) * radius,
+      y: center.y + Math.sin(angle) * radius,
+    });
+  });
+  return centers;
+};
+
+const radialRadius = (depth) => {
+  const { width, height } = graphState.size;
+  if (!width || !height) return 0;
+  const minDim = Math.min(width, height);
+  const spacing = Math.max(130, minDim / Math.max(2, graphState.maxDepth + 1.5));
+  return depth === 0 ? 0 : spacing * depth;
+};
+
+const getClusterTarget = (node) => {
+  const target = graphState.clusterCenters.get(node.clusterId);
+  if (target) return target;
+  const { width, height } = graphState.size;
+  return { x: width / 2, y: height / 2 };
+};
+
+const highlightGraphSelection = (nodeId) => {
+  if (graphState.nodeSelection) {
+    graphState.nodeSelection.classed("selected", (node) => node.id === nodeId);
+    const activeNode = graphState.nodeSelection.filter((node) => node.id === nodeId);
+    if (!activeNode.empty()) {
+      activeNode.raise();
+    }
+  }
+  if (graphState.linkSelection) {
+    graphState.linkSelection.classed("selected", (link) => {
+      const sourceId = typeof link.source === "object" ? link.source.id : link.source;
+      const targetId = typeof link.target === "object" ? link.target.id : link.target;
+      return sourceId === nodeId || targetId === nodeId;
+    });
+  }
+};
+
+const focusGraphNode = (nodeId, { scale = 1.2 } = {}) => {
+  if (!graphState.svg || !graphState.zoom) return;
+  const node = graphState.nodesById.get(nodeId);
+  if (!node) return;
+  if (!Number.isFinite(node.x) || !Number.isFinite(node.y)) {
+    window.requestAnimationFrame(() => focusGraphNode(nodeId, { scale }));
+    return;
+  }
+  const { width, height } = graphState.size;
+  const clampedScale = Math.min(3, Math.max(0.5, scale));
+  const transform = d3.zoomIdentity
+    .translate(width / 2 - node.x * clampedScale, height / 2 - node.y * clampedScale)
+    .scale(clampedScale);
+  graphState.currentTransform = transform;
+  graphState.svg.transition().duration(600).call(graphState.zoom.transform, transform);
+};
+
 const init = async () => {
   try {
     const response = await fetch("manning_tree_latest.json");
@@ -52,7 +142,12 @@ const init = async () => {
   populateSummary();
   populateFilters();
   renderRoster();
-  initGraph();
+  try {
+    initGraph();
+  } catch (error) {
+    console.error("Graph initialization failed:", error);
+    showGraphError(error);
+  }
   wireEvents();
 };
 
@@ -186,133 +281,299 @@ const renderRoster = () => {
 };
 
 const initGraph = () => {
+  console.time("initGraph");
   const container = document.getElementById("network");
+  if (!container) return;
 
-  const nodeById = new Map(state.nodes.map((node) => [node.id, node]));
-  const depthGroups = new Map();
-  state.nodes.forEach((node) => {
-    if (!depthGroups.has(node.depth)) {
-      depthGroups.set(node.depth, []);
+  const svg = d3.select(container).select("svg.graph-canvas");
+  if (!svg.node()) return;
+
+  svg.selectAll("*").remove();
+  if (graphState.resizeObserver) {
+    graphState.resizeObserver.disconnect();
+    graphState.resizeObserver = null;
+  }
+
+  graphState.container = container;
+  graphState.svg = svg;
+
+  const zoomLayer = svg.append("g").attr("class", "graph-viewport");
+  const linkGroup = zoomLayer.append("g").attr("class", "graph-links");
+  const nodeGroup = zoomLayer.append("g").attr("class", "graph-nodes");
+  graphState.zoomLayer = zoomLayer;
+
+  const rect = container.getBoundingClientRect();
+  const width = rect.width || container.clientWidth || 960;
+  const height = rect.height || container.clientHeight || 720;
+  graphState.size = { width, height };
+
+  svg.attr("viewBox", `0 0 ${width} ${height}`).attr("preserveAspectRatio", "xMidYMid meet");
+
+  const rootId = state.data.root;
+  const depthById = new Map(state.nodes.map((node) => [node.id, node.depth ?? 0]));
+
+  const parentByChild = new Map();
+  state.edges.forEach((edge) => {
+    if (!parentByChild.has(edge.to)) {
+      parentByChild.set(edge.to, []);
     }
-    depthGroups.get(node.depth).push(node.id);
+    parentByChild.get(edge.to).push(edge.from);
   });
 
-  const depthOrdering = new Map();
-  depthGroups.forEach((ids, depth) => {
-    ids.sort((a, b) => {
-      const nameA = (nodeById.get(a)?.name || a).toLowerCase();
-      const nameB = (nodeById.get(b)?.name || b).toLowerCase();
-      return nameA.localeCompare(nameB);
-    });
-    ids.forEach((id, index) => {
-      depthOrdering.set(id, { index, total: ids.length });
-    });
-  });
-
-  const computePosition = (depth, index, total) => {
-    if (depth === 0) {
-      return { x: 0, y: 0 };
+  const clusterCache = new Map([[rootId, rootId]]);
+  const getClusterId = (nodeId) => {
+    if (clusterCache.has(nodeId)) {
+      return clusterCache.get(nodeId);
     }
-    const arc = depth === 1 ? Math.PI * 1.2 : Math.PI * 1.8;
-    const startAngle = -arc / 2;
-    const angle =
-      total === 1
-        ? 0
-        : startAngle +
-          (index / (total - 1)) * arc +
-          (depth > 2 ? (index % 2 === 0 ? 0.04 : -0.04) : 0);
-    const radius = depth * 280;
-    return {
-      x: radius * Math.cos(angle),
-      y: radius * Math.sin(angle),
-    };
+    if (nodeId === rootId) {
+      clusterCache.set(nodeId, rootId);
+      return rootId;
+    }
+
+    const visited = new Set([nodeId]);
+    let current = nodeId;
+    let clusterCandidate = rootId;
+
+    while (true) {
+      const parents = parentByChild.get(current);
+      if (!parents || !parents.length) {
+        clusterCandidate = rootId;
+        break;
+      }
+
+      const currentDepth = depthById.get(current) ?? Number.POSITIVE_INFINITY;
+      let nextParent =
+        parents.find((parent) => (depthById.get(parent) ?? Number.POSITIVE_INFINITY) < currentDepth) ??
+        parents[0];
+
+      if (!nextParent || visited.has(nextParent)) {
+        clusterCandidate = rootId;
+        break;
+      }
+
+      if (nextParent === rootId) {
+        clusterCandidate = current;
+        break;
+      }
+
+      visited.add(nextParent);
+      current = nextParent;
+    }
+
+    const resolved = clusterCandidate === nodeId ? nodeId : clusterCandidate;
+    visited.forEach((visitedId) => {
+      if (!clusterCache.has(visitedId)) {
+        clusterCache.set(visitedId, visitedId === rootId ? rootId : resolved);
+      }
+    });
+    clusterCache.set(nodeId, resolved);
+    return resolved;
   };
 
-  const nodesData = state.nodes.map((node) => {
-    const { index = 0, total = 1 } = depthOrdering.get(node.id) || {};
-    const depth = nodeById.get(node.id)?.depth ?? 0;
-    const position = computePosition(depth, index, total);
-    return {
-      id: node.id,
-      label: `${node.name}`,
-      title: buildTooltip(node),
-      color: pickDepthColor(node.depth),
-      shape: "dot",
-      size: node.id === state.data.root ? 26 : Math.min(16 + node.direct_advisee_count, 30),
-      borderWidth: node.id === state.data.root ? 3 : 1,
-      mass: Math.max(1, 6 - node.depth),
-      x: position.x,
-      y: position.y,
-      font: {
-        color: "#111829",
-        face: "Inter, Arial",
-        size: node.id === state.data.root ? 18 : 14,
-        strokeWidth: 3,
-        strokeColor: "#ffffff",
-      },
-    };
-  });
-
-  const edgesData = state.edges.map((edge) => ({
-    ...edge,
-    arrows: "to",
-    color: { color: "#B6BED3" },
-    smooth: { type: "cubicBezier", roundness: 0.3 },
+  const nodes = state.nodes.map((node) => ({
+    ...node,
+    clusterId: getClusterId(node.id),
   }));
 
-  const options = {
-    layout: {
-      improvedLayout: true,
-    },
-    physics: {
-      enabled: true,
-      stabilization: {
-        iterations: 250,
-        updateInterval: 50,
-        fit: true,
-      },
-      barnesHut: {
-        gravitationalConstant: -2800,
-        centralGravity: 0.08,
-        springLength: 230,
-        springConstant: 0.035,
-        damping: 0.26,
-        avoidOverlap: 1,
-      },
-    },
-    interaction: {
-      hover: true,
-      tooltipDelay: 120,
-      multiselect: false,
-      navigationButtons: true,
-    },
-    edges: {
-      arrows: {
-        to: { enabled: true, scaleFactor: 0.6 },
-      },
-    },
+  const links = state.edges.map((edge) => ({
+    source: edge.from,
+    target: edge.to,
+  }));
+  console.info("Graph data ready", { nodeCount: nodes.length, linkCount: links.length });
+
+  graphState.maxDepth = d3.max(nodes, (node) => node.depth ?? 0) ?? 0;
+  graphState.directAdvisees = nodes.filter((node) => node.id !== rootId && node.clusterId === node.id);
+  graphState.clusterCenters = computeClusterCenters(width, height, graphState.directAdvisees, rootId);
+  graphState.nodesById = new Map(nodes.map((node) => [node.id, node]));
+
+  const nodeRadius = (node) => {
+    if (node.id === rootId) return 24;
+    const adviseeBonus = node.direct_advisee_count
+      ? Math.min(16, Math.sqrt(node.direct_advisee_count) * 3)
+      : 0;
+    const depthFactor = Math.max(0, graphState.maxDepth - (node.depth ?? 0)) * 0.6;
+    return Math.max(8, 10 + adviseeBonus + depthFactor);
   };
 
-  network = new vis.Network(container, { nodes: nodesData, edges: edgesData }, options);
+  const zoom = d3
+    .zoom()
+    .scaleExtent([0.3, 4])
+    .on("zoom", (event) => {
+      graphState.currentTransform = event.transform;
+      graphState.zoomLayer.attr("transform", event.transform);
+    });
+  svg.call(zoom).on("dblclick.zoom", null);
+  graphState.zoom = zoom;
+  graphState.currentTransform = d3.zoomIdentity;
 
-  network.once("stabilizationIterationsDone", () => {
-    network.setOptions({ physics: false });
-  });
+  const drag = d3
+    .drag()
+    .on("start", (event, node) => {
+      if (!event.active && graphState.simulation) {
+        graphState.simulation.alphaTarget(0.3).restart();
+      }
+      node.fx = node.x;
+      node.fy = node.y;
+    })
+    .on("drag", (event, node) => {
+      node.fx = event.x;
+      node.fy = event.y;
+    })
+    .on("end", (event, node) => {
+      if (!event.active && graphState.simulation) {
+        graphState.simulation.alphaTarget(0);
+      }
+      if (node.id === rootId) {
+        node.fx = graphState.size.width / 2;
+        node.fy = graphState.size.height / 2;
+      } else {
+        node.fx = null;
+        node.fy = null;
+      }
+    });
 
-  network.on("selectNode", (params) => {
-    const nodeId = params.nodes[0];
-    selectNode(nodeId);
-  });
+  const linkSelection = linkGroup
+    .selectAll("line")
+    .data(links)
+    .join("line")
+    .attr("class", "graph-link")
+    .attr("stroke-width", 1.2);
 
-  network.on("doubleClick", (params) => {
-    if (params.nodes?.length) {
-      const node = state.nodes.find((n) => n.id === params.nodes[0]);
+  const nodeSelection = nodeGroup
+    .selectAll("g")
+    .data(nodes, (node) => node.id)
+    .join((enter) => {
+      const group = enter.append("g").attr("class", "graph-node");
+      group
+        .append("circle")
+        .attr("class", (node) => (node.id === rootId ? "graph-node-circle root" : "graph-node-circle"))
+        .attr("r", (node) => nodeRadius(node))
+        .attr("fill", (node) => pickDepthColor(node.depth))
+        .attr("stroke", (node) => (node.id === rootId ? "#143166" : "#ffffff"))
+        .attr("stroke-width", (node) => (node.id === rootId ? 3 : 1.5));
+      group
+        .append("text")
+        .attr("class", "node-label")
+        .attr("text-anchor", "middle")
+        .attr("dy", (node) => nodeRadius(node) + 18)
+        .text((node) => node.name);
+      group.append("title").text((node) => buildTooltip(node));
+      return group;
+    });
+
+  nodeSelection
+    .attr("tabindex", 0)
+    .attr("role", "button")
+    .call(drag)
+    .on("click", (event, node) => {
+      event.stopPropagation();
+      selectNode(node.id);
+    })
+    .on("dblclick", (event, node) => {
+      event.stopPropagation();
       openProfileLink(node);
-    }
-  });
+    })
+    .on("keydown", (event, node) => {
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        selectNode(node.id, { focus: event.key === "Enter" });
+      }
+    });
 
-  // focus root by default
+  nodeSelection.classed("is-root", (node) => node.id === rootId);
+
+  graphState.nodeSelection = nodeSelection;
+  graphState.linkSelection = linkSelection;
+
+  const linkDistance = (link) => {
+    const sourceDepth =
+      typeof link.source === "object" ? link.source.depth : depthById.get(link.source) ?? 0;
+    const targetDepth =
+      typeof link.target === "object" ? link.target.depth : depthById.get(link.target) ?? 0;
+    if (sourceDepth === 0) return 220;
+    if (sourceDepth === 1 && targetDepth > 1) return 160;
+    return 90 + targetDepth * 30;
+  };
+
+  const simulation = d3
+    .forceSimulation(nodes)
+    .force("link", d3.forceLink(links).id((node) => node.id).distance(linkDistance).strength(0.9))
+    .force("charge", d3.forceManyBody().strength(-220))
+    .force("center", d3.forceCenter(width / 2, height / 2))
+    .force("collide", d3.forceCollide().radius((node) => nodeRadius(node) + 14).strength(1.2))
+    .force(
+      "radial",
+      d3.forceRadial((node) => radialRadius(node.depth), width / 2, height / 2).strength(0.3)
+    )
+    .force(
+      "clusterX",
+      d3.forceX((node) => getClusterTarget(node).x).strength((node) =>
+        node.depth === 0 ? 0.62 : 0.15
+      )
+    )
+    .force(
+      "clusterY",
+      d3.forceY((node) => getClusterTarget(node).y).strength((node) =>
+        node.depth === 0 ? 0.62 : 0.15
+      )
+    )
+    .alphaDecay(0.024)
+    .on("tick", () => {
+      linkSelection
+        .attr("x1", (link) => link.source.x)
+        .attr("y1", (link) => link.source.y)
+        .attr("x2", (link) => link.target.x)
+        .attr("y2", (link) => link.target.y);
+      nodeSelection.attr("transform", (node) => `translate(${node.x}, ${node.y})`);
+    });
+
+  graphState.simulation = simulation;
+
+  const rootNode = graphState.nodesById.get(rootId);
+  if (rootNode) {
+    rootNode.fx = width / 2;
+    rootNode.fy = height / 2;
+  }
+
+  if (typeof ResizeObserver !== "undefined") {
+    const resizeObserver = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        if (entry.target !== container) continue;
+        const newWidth = entry.contentRect.width || container.clientWidth || width;
+        const newHeight = entry.contentRect.height || container.clientHeight || height;
+        if (!newWidth || !newHeight) continue;
+        graphState.size = { width: newWidth, height: newHeight };
+        svg.attr("viewBox", `0 0 ${newWidth} ${newHeight}`);
+        graphState.clusterCenters = computeClusterCenters(
+          newWidth,
+          newHeight,
+          graphState.directAdvisees,
+          rootId
+        );
+        graphState.simulation
+          .force("center", d3.forceCenter(newWidth / 2, newHeight / 2))
+          .force(
+            "radial",
+            d3.forceRadial((node) => radialRadius(node.depth), newWidth / 2, newHeight / 2).strength(
+              0.3
+            )
+          );
+        const lockedRoot = graphState.nodesById.get(rootId);
+        if (lockedRoot) {
+          lockedRoot.fx = newWidth / 2;
+          lockedRoot.fy = newHeight / 2;
+        }
+        graphState.simulation.alpha(0.35).restart();
+      }
+    });
+    resizeObserver.observe(container);
+    graphState.resizeObserver = resizeObserver;
+  } else {
+    console.warn("ResizeObserver not supported; graph will not adapt to container size changes.");
+  }
+
   selectNode(state.data.root, { focus: true });
+  console.timeEnd("initGraph");
 };
 
 const buildTooltip = (node) => {
@@ -321,14 +582,14 @@ const buildTooltip = (node) => {
     node.expertise_keywords && node.expertise_keywords.length
       ? node.expertise_keywords.slice(0, 4).join(", ")
       : "No research keywords listed";
-  return `
-    <strong>${node.name}</strong><br />
-    ${affiliation}<br />
-    Direct PhD students: ${formatNumber(node.direct_advisee_count)} | PhD lineage: ${formatNumber(
-    node.total_descendants
-  )}<br />
-    ${research}
-  `;
+  return [
+    node.name,
+    affiliation,
+    `Direct PhD students: ${formatNumber(node.direct_advisee_count)} | PhD lineage: ${formatNumber(
+      node.total_descendants
+    )}`,
+    research,
+  ].join("\n");
 };
 
 const pickDepthColor = (depth) => {
@@ -343,14 +604,10 @@ const selectNode = (nodeId, options = {}) => {
   const node = state.nodes.find((n) => n.id === nodeId);
   if (!node) return;
 
-  if (network) {
-    network.selectNodes([nodeId]);
-    if (options.focus) {
-      network.focus(nodeId, {
-        animation: { duration: 600, easingFunction: "easeInOutQuad" },
-        scale: 1.2,
-      });
-    }
+  highlightGraphSelection(nodeId);
+  if (options.focus) {
+    const scale = nodeId === state.data.root ? 1.05 : 1.35;
+    focusGraphNode(nodeId, { scale });
   }
 
   highlightRosterSelection();
@@ -459,6 +716,18 @@ const handlePreviewError = () => {
   elements.previewStatus.innerHTML = homepage
     ? `Preview unavailable. <a href="${homepage}" target="_blank" rel="noopener">Open homepage in a new tab</a>.`
     : "";
+};
+
+const showGraphError = (error) => {
+  const container = document.getElementById("network");
+  if (!container) return;
+  container.innerHTML = `
+    <div class="graph-error">
+      <h3>Graph failed to load</h3>
+      <p>${error?.message || "Unexpected error occurred while rendering the visualization."}</p>
+      <p>Please check the browser console for details and reload the page.</p>
+    </div>
+  `;
 };
 
 init();

@@ -262,6 +262,98 @@ a:hover {
   background: var(--surface);
   box-shadow: inset 0 0 0 1px rgba(26, 61, 143, 0.03),
     0 14px 36px -24px rgba(15, 26, 55, 0.5);
+  position: relative;
+  overflow: hidden;
+}
+
+.graph-canvas {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.graph-viewport {
+  cursor: grab;
+}
+
+.graph-viewport:active {
+  cursor: grabbing;
+}
+
+.graph-link {
+  stroke: #9bb7db;
+  stroke-opacity: 0.32;
+}
+
+.graph-link.selected {
+  stroke-opacity: 0.75;
+  stroke: #4b6fb6;
+}
+
+.graph-node {
+  cursor: pointer;
+}
+
+.graph-node-circle {
+  transition: stroke 0.2s ease, stroke-width 0.2s ease, fill 0.2s ease;
+}
+
+.graph-node.selected .graph-node-circle {
+  stroke: #1a3d8f;
+  stroke-width: 3px;
+}
+
+.graph-node.is-root .graph-node-circle {
+  stroke: #143166;
+  stroke-width: 3px;
+}
+
+.graph-node .node-label {
+  font-size: 0.7rem;
+  font-weight: 600;
+  fill: #1c233a;
+  paint-order: stroke;
+  stroke: rgba(255, 255, 255, 0.95);
+  stroke-width: 4px;
+  pointer-events: none;
+}
+
+.graph-node.is-root .node-label {
+  font-size: 0.78rem;
+}
+
+.graph-node.selected .node-label {
+  fill: #102a63;
+}
+
+.graph-node:focus-visible .graph-node-circle {
+  outline: 3px solid rgba(26, 61, 143, 0.45);
+  outline-offset: 4px;
+}
+
+.graph-error {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 2rem;
+  text-align: center;
+  color: #102a63;
+  background: rgba(255, 255, 255, 0.92);
+}
+
+.graph-error h3 {
+  margin: 0;
+  font-size: 1.25rem;
+}
+
+.graph-error p {
+  margin: 0;
+  max-width: 420px;
+  color: #47506a;
 }
 
 .details-grid {

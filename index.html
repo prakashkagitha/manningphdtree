@@ -5,13 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Chris Manning PhD Tree</title>
     <link rel="stylesheet" href="style.css?v=0.1.1" />
-    <link
-      rel="stylesheet"
-      href="https://cdnjs.cloudflare.com/ajax/libs/vis-network/9.1.2/dist/dist/vis-network.min.css"
-      integrity="sha512-WgxfT5LWjfszlPHXRmBWHkV2eceiWTOBvrKCNbdgDYTHrT2AeLCGbF4sZlZw3UMN3WtL0tGUoIAKsu8mllg/XA=="
-      crossorigin="anonymous"
-      referrerpolicy="no-referrer"
-    />
+    <script src="https://d3js.org/d3.v7.min.js"></script>
   </head>
   <body>
     <header class="site-header">
@@ -91,7 +85,9 @@
       </aside>
 
       <section class="graph-area">
-        <div id="network"></div>
+        <div id="network">
+          <svg class="graph-canvas" aria-label="PhD advisee network visualization"></svg>
+        </div>
         <div class="details-grid">
           <article id="profile-card" class="profile-card hidden">
             <header>
@@ -150,12 +146,6 @@
       </p>
     </footer>
 
-    <script
-      src="https://cdnjs.cloudflare.com/ajax/libs/vis-network/9.1.2/dist/vis-network.min.js"
-      integrity="sha512-LnvoEWDFrqGHlHmDD2101OrLcbsfkrzoSpvtSQtxK3RMnRV0eOkhhBN2dXHKRrUU8p2DGRTk35n4O8nWSVe1mQ=="
-      crossorigin="anonymous"
-      referrerpolicy="no-referrer"
-    ></script>
-    <script src="app.js?v=0.1.1" type="module"></script>
+    <script src="app.js" type="module"></script>
   </body>
 </html>
