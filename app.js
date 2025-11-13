@@ -35,6 +35,7 @@ const graphState = {
   lineageNodes: new Set(),
   lineageEdges: new Set(),
   hoveredId: null,
+  maxDescendants: 0,
 };
 
 let previewLoadTimeout = null;
@@ -68,6 +69,24 @@ elements.previewRefresh.disabled = true;
 
 const depthColors = ["#345CFF", "#1CB5E0", "#00B894", "#FDC830", "#F76B1C", "#d853a6"];
 
+const computeInfluenceScore = (node) => {
+  if (!node) return 0;
+  const totalDesc = Number(node.total_descendants ?? 0);
+  const directAdv = Number(node.direct_advisee_count ?? 0);
+  return totalDesc + directAdv * 0.5;
+};
+
+const normalizeValue = (value, maxValue) => {
+  if (!maxValue) return 0;
+  return value <= 0 ? 0 : Math.min(1, value / maxValue);
+};
+
+const normalizeInfluence = (node, maxInfluence) => {
+  if (!node || !maxInfluence) return 0;
+  const score = computeInfluenceScore(node);
+  return normalizeValue(score, maxInfluence);
+};
+
 const computeClusterCenters = (width, height, directAdvisees, rootId) => {
   const centers = new Map();
   const center = { x: width / 2, y: height / 2 };
@@ -76,9 +95,13 @@ const computeClusterCenters = (width, height, directAdvisees, rootId) => {
     return centers;
   }
 
-  const radius = Math.min(width, height) * 0.32;
+  const baseRadius = Math.min(width, height) * 0.32;
+  const maxInfluence =
+    directAdvisees.reduce((max, node) => Math.max(max, computeInfluenceScore(node)), 0) || 1;
   directAdvisees.forEach((node, index) => {
     const angle = (index / directAdvisees.length) * Math.PI * 2 - Math.PI / 2;
+    const influenceBoost = normalizeInfluence(node, maxInfluence);
+    const radius = baseRadius * (1 + influenceBoost * 0.6);
     centers.set(node.id, {
       x: center.x + Math.cos(angle) * radius,
       y: center.y + Math.sin(angle) * radius,
@@ -247,6 +270,44 @@ const focusGraphNode = (nodeId, { scale = 1.2 } = {}) => {
   graphState.svg.transition().duration(600).call(graphState.zoom.transform, transform);
 };
 
+const getGraphBounds = () => {
+  if (!graphState.nodesById || !graphState.nodesById.size) return null;
+  const nodes = Array.from(graphState.nodesById.values()).filter(
+    (node) => Number.isFinite(node.x) && Number.isFinite(node.y)
+  );
+  if (!nodes.length) return null;
+  const minX = d3.min(nodes, (node) => node.x);
+  const maxX = d3.max(nodes, (node) => node.x);
+  const minY = d3.min(nodes, (node) => node.y);
+  const maxY = d3.max(nodes, (node) => node.y);
+  if (!Number.isFinite(minX) || !Number.isFinite(maxX) || !Number.isFinite(minY) || !Number.isFinite(maxY)) {
+    return null;
+  }
+  return { minX, maxX, minY, maxY };
+};
+
+const focusGraphBounds = ({ padding = 200, maxScale = 1.05 } = {}) => {
+  if (!graphState.svg || !graphState.zoom) return false;
+  const bounds = getGraphBounds();
+  if (!bounds) return false;
+  const { width, height } = graphState.size;
+  if (!width || !height) return false;
+  const boundsWidth = Math.max(1, bounds.maxX - bounds.minX);
+  const boundsHeight = Math.max(1, bounds.maxY - bounds.minY);
+  const scaleX = width / (boundsWidth + padding);
+  const scaleY = height / (boundsHeight + padding);
+  const targetScale = Math.min(maxScale, Math.min(scaleX, scaleY));
+  const clampedScale = Math.min(2, Math.max(0.35, targetScale));
+  const centerX = (bounds.minX + bounds.maxX) / 2;
+  const centerY = (bounds.minY + bounds.maxY) / 2;
+  const transform = d3.zoomIdentity
+    .translate(width / 2 - centerX * clampedScale, height / 2 - centerY * clampedScale)
+    .scale(clampedScale);
+  graphState.currentTransform = transform;
+  graphState.svg.transition().duration(600).call(graphState.zoom.transform, transform);
+  return true;
+};
+
 const attemptInitialFocus = () => {
   if (graphState.initialFocusDone) return;
   const { width, height } = graphState.size;
@@ -261,7 +322,10 @@ const attemptInitialFocus = () => {
   }
   graphState.initialFocusDone = true;
   graphState.initialFocusScheduled = false;
-  focusGraphNode(state.data.root, { scale: 1.15 });
+  const didFitView = focusGraphBounds({ padding: 260, maxScale: 0.95 });
+  if (!didFitView) {
+    focusGraphNode(state.data.root, { scale: 0.85 });
+  }
 };
 
 const scheduleInitialFocus = () => {
@@ -538,16 +602,24 @@ const initGraph = () => {
   graphState.parentByChild = parentByChild;
   graphState.childrenByParent = childrenByParent;
   graphState.depthById = depthById;
+  graphState.maxInfluence = d3.max(nodes, (node) => computeInfluenceScore(node)) ?? 0;
+  graphState.maxDescendants = d3.max(nodes, (node) => node.total_descendants ?? 0) ?? 0;
   graphState.clusterCenters = computeClusterCenters(width, height, graphState.directAdvisees, rootId);
   graphState.nodesById = new Map(nodes.map((node) => [node.id, node]));
 
   const nodeRadius = (node) => {
-    if (node.id === rootId) return 24;
-    const adviseeBonus = node.direct_advisee_count
-      ? Math.min(16, Math.sqrt(node.direct_advisee_count) * 3)
+    const totalDesc = Math.max(0, node.total_descendants ?? 0);
+    const compareMax = graphState.maxDescendants || 1;
+    const normalized = normalizeValue(Math.sqrt(totalDesc), Math.sqrt(compareMax));
+    const descendantBonus = 10 + normalized * 42;
+    const directBonus = node.direct_advisee_count
+      ? Math.min(11, Math.sqrt(node.direct_advisee_count) * 2.9)
       : 0;
-    const depthFactor = Math.max(0, graphState.maxDepth - (node.depth ?? 0)) * 0.6;
-    return Math.max(8, 10 + adviseeBonus + depthFactor);
+    const computedRadius = Math.max(11, descendantBonus + directBonus);
+    if (node.id === state.data.root) {
+      return computedRadius * 1.15;
+    }
+    return computedRadius;
   };
 
   const zoom = d3
@@ -670,9 +742,15 @@ const initGraph = () => {
       typeof link.source === "object" ? link.source.depth : depthById.get(link.source) ?? 0;
     const targetDepth =
       typeof link.target === "object" ? link.target.depth : depthById.get(link.target) ?? 0;
-    if (sourceDepth === 0) return 220;
-    if (sourceDepth === 1 && targetDepth > 1) return 160;
-    return 90 + targetDepth * 30;
+    let baseDistance;
+    if (sourceDepth === 0) baseDistance = 220;
+    else if (sourceDepth === 1 && targetDepth > 1) baseDistance = 160;
+    else baseDistance = 90 + targetDepth * 30;
+
+    const sourceNode = typeof link.source === "object" ? link.source : graphState.nodesById.get(link.source);
+    const influenceBoost = normalizeInfluence(sourceNode, graphState.maxInfluence);
+    const influenceMultiplier = 1 + influenceBoost * 0.6;
+    return baseDistance * influenceMultiplier;
   };
 
   const simulation = d3
